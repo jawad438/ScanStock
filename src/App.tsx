@@ -41,6 +41,8 @@ export default function App() {
   });
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
+  const [manualEntry, setManualEntry] = useState({ name: '', price: '', quantity: '1' });
   const [isScanning, setIsScanning] = useState(false);
   const [lastScanned, setLastScanned] = useState<string | null>(null);
   const [registeringProduct, setRegisteringProduct] = useState<{barcode: string, name: string, price: string} | null>(null);
@@ -49,6 +51,18 @@ export default function App() {
   const t = translations[settings.language];
 
   // --- Effects ---
+  useEffect(() => {
+    return () => {
+      if (scannerRef.current) {
+        scannerRef.current.stop().catch(console.error);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    stopScanner();
+  }, [activeTab]);
+
   useEffect(() => {
     localStorage.setItem('scanstock_items', JSON.stringify(items));
   }, [items]);
@@ -163,27 +177,54 @@ export default function App() {
     setTimeout(() => setLastScanned(null), 3000);
   };
 
+  const addManualItem = () => {
+    if (!manualEntry.name || !manualEntry.price) return;
+    
+    const newItem: InventoryItem = {
+      id: Math.random().toString(36).substr(2, 9),
+      barcode: 'MANUAL',
+      name: manualEntry.name,
+      price: parseFloat(manualEntry.price) || 0,
+      quantity: parseInt(manualEntry.quantity) || 1,
+      timestamp: Date.now()
+    };
+    
+    setItems(prev => [newItem, ...prev]);
+    setIsManualEntryOpen(false);
+    setManualEntry({ name: '', price: '', quantity: '1' });
+    setLastScanned('item_added');
+    setTimeout(() => setLastScanned(null), 2000);
+  };
+
   const startScanner = async () => {
-    try {
-      const html5QrCode = new Html5Qrcode("reader");
-      scannerRef.current = html5QrCode;
-      setIsScanning(true);
-      
-      await html5QrCode.start(
-        { facingMode: "environment" },
-        {
-          fps: 10,
-          qrbox: { width: 250, height: 250 }
-        },
-        (decodedText) => {
-          handleScan(decodedText);
-        },
-        () => {}
-      );
-    } catch (err) {
-      console.error("Failed to start scanner", err);
-      setIsScanning(false);
-    }
+    setIsScanning(true);
+    // Wait for React to render the #reader element
+    setTimeout(async () => {
+      try {
+        const element = document.getElementById("reader");
+        if (!element) {
+          throw new Error("HTML Element with id=reader not found");
+        }
+
+        const html5QrCode = new Html5Qrcode("reader");
+        scannerRef.current = html5QrCode;
+        
+        await html5QrCode.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: { width: 250, height: 250 }
+          },
+          (decodedText) => {
+            handleScan(decodedText);
+          },
+          () => {}
+        );
+      } catch (err) {
+        console.error("Failed to start scanner", err);
+        setIsScanning(false);
+      }
+    }, 100);
   };
 
   const stopScanner = async () => {
@@ -201,10 +242,27 @@ export default function App() {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const html5QrCode = new Html5Qrcode("reader");
+    
+    // For file upload, we can use a temporary element if #reader is not available
+    const tempId = "reader-temp";
+    let tempElem = document.getElementById(tempId);
+    if (!tempElem) {
+      tempElem = document.createElement('div');
+      tempElem.id = tempId;
+      tempElem.style.display = 'none';
+      document.body.appendChild(tempElem);
+    }
+
+    const html5QrCode = new Html5Qrcode(tempId);
     html5QrCode.scanFile(file, true)
-      .then(decodedText => handleScan(decodedText))
-      .catch(err => console.error("Error scanning file", err));
+      .then(decodedText => {
+        handleScan(decodedText);
+        html5QrCode.clear();
+      })
+      .catch(err => {
+        console.error("Error scanning file", err);
+        html5QrCode.clear();
+      });
   };
 
   const totalAmount = items.reduce((acc, item) => acc + item.price * item.quantity, 0);
@@ -284,10 +342,19 @@ export default function App() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <h2 className="text-lg font-black uppercase tracking-tight">{t.inventory}</h2>
-                  <label className="p-2 rounded-xl bg-stone-200 cursor-pointer">
-                    <Upload className="w-5 h-5" />
-                    <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
-                  </label>
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={() => setIsManualEntryOpen(true)}
+                      className="p-2 rounded-xl bg-stone-200 hover:bg-stone-300 transition-colors"
+                      title={t.addItem}
+                    >
+                      <Plus className="w-5 h-5" />
+                    </button>
+                    <label className="p-2 rounded-xl bg-stone-200 cursor-pointer hover:bg-stone-300 transition-colors">
+                      <Upload className="w-5 h-5" />
+                      <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
+                    </label>
+                  </div>
                 </div>
 
                 <div className="space-y-3">
@@ -334,14 +401,27 @@ export default function App() {
               exit={{ opacity: 0, x: -20 }}
               className="p-6 space-y-6"
             >
+              {isScanning && (
+                <div className="relative aspect-square max-w-sm mx-auto bg-stone-200 rounded-[2.5rem] overflow-hidden shadow-2xl mb-6">
+                  <div id="reader" className="w-full h-full"></div>
+                  <button 
+                    onClick={stopScanner}
+                    className="absolute bottom-6 left-1/2 -translate-x-1/2 px-6 py-2 bg-white/20 backdrop-blur-md border border-white/30 rounded-full text-white text-sm font-bold uppercase tracking-wider"
+                  >
+                    {t.stopScanning}
+                  </button>
+                </div>
+              )}
               <div className="flex items-center justify-between">
                 <h2 className="text-2xl font-black uppercase tracking-tighter">{t.database}</h2>
-                <button 
-                  onClick={startScanner}
-                  className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-bold text-sm uppercase tracking-wider shadow-lg shadow-emerald-500/20"
-                >
-                  {t.scanBarcode}
-                </button>
+                {!isScanning && (
+                  <button 
+                    onClick={startScanner}
+                    className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-bold text-sm uppercase tracking-wider shadow-lg shadow-emerald-500/20"
+                  >
+                    {t.scanBarcode}
+                  </button>
+                )}
               </div>
 
               <div className="grid gap-4">
@@ -457,6 +537,68 @@ export default function App() {
 
       {/* Modals */}
       <AnimatePresence>
+        {/* Manual Entry Modal */}
+        {isManualEntryOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-6">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsManualEntryOpen(false)} className="absolute inset-0 bg-stone-950/60 backdrop-blur-md" />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-md bg-stone-950 rounded-[3rem] p-8 shadow-2xl"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-black uppercase tracking-tighter">{t.addItem}</h2>
+                <button onClick={() => setIsManualEntryOpen(false)} className="p-2 rounded-full hover:bg-stone-200"><X className="w-6 h-6" /></button>
+              </div>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-stone-500 uppercase ml-2">{t.productName}</label>
+                  <input 
+                    autoFocus
+                    value={manualEntry.name}
+                    onChange={e => setManualEntry({...manualEntry, name: e.target.value})}
+                    placeholder="e.g. Custom Item"
+                    className="w-full p-4 bg-stone-200 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-stone-500 uppercase ml-2">{t.productPrice}</label>
+                    <input 
+                      type="number"
+                      step="0.01"
+                      value={manualEntry.price}
+                      onChange={e => setManualEntry({...manualEntry, price: e.target.value})}
+                      placeholder="0.00"
+                      className="w-full p-4 bg-stone-200 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-stone-500 uppercase ml-2">{t.quantity}</label>
+                    <input 
+                      type="number"
+                      value={manualEntry.quantity}
+                      onChange={e => setManualEntry({...manualEntry, quantity: e.target.value})}
+                      className="w-full p-4 bg-stone-200 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-3 mt-8">
+                <button onClick={() => setIsManualEntryOpen(false)} className="flex-1 py-4 rounded-2xl font-bold uppercase text-stone-500">{t.cancel}</button>
+                <button 
+                  onClick={addManualItem}
+                  disabled={!manualEntry.name || !manualEntry.price}
+                  className="flex-2 py-4 bg-emerald-500 text-white rounded-2xl font-bold uppercase tracking-widest shadow-lg shadow-emerald-500/20 disabled:opacity-50"
+                >
+                  {t.addItem}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
         {/* Register Product Modal */}
         {registeringProduct && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-6">

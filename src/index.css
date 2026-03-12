@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --color-stone-50: var(--stone-50);
+  --color-stone-100: var(--stone-100);
+  --color-stone-200: var(--stone-200);
+  --color-stone-300: var(--stone-300);
+  --color-stone-400: var(--stone-400);
+  --color-stone-500: var(--stone-500);
+  --color-stone-600: var(--stone-600);
+  --color-stone-700: var(--stone-700);
+  --color-stone-800: var(--stone-800);
+  --color-stone-900: var(--stone-900);
+  --color-stone-950: var(--stone-950);
+}
+
+:root {
+  --stone-50: #ffffff;
+  --stone-100: #f0f0f0;
+  --stone-200: #d6d6d6; /* Secondary/Border in light - Updated from #e5e5e5 */
+  --stone-300: #d4d4d4;
+  --stone-400: #a3a3a3;
+  --stone-500: #737373;
+  --stone-600: #525252;
+  --stone-700: #404040;
+  --stone-800: #262626;
+  --stone-900: #000000; /* Text/Icons in light mode */
+  --stone-950: #f5f5f5; /* Background in light mode */
+}
+
+.dark {
+  --stone-50: #fafaf9;
+  --stone-100: #f5f5f4;
+  --stone-200: #1c1917; /* Secondary/Border in dark */
+  --stone-300: #d6d3d1;
+  --stone-400: #a8a29e;
+  --stone-500: #78716c;
+  --stone-600: #57534e;
+  --stone-700: #44403c;
+  --stone-800: #292524;
+  --stone-900: #ffffff; /* Text/Icons in dark mode */
+  --stone-950: #0c0a09; /* Background in dark mode */
+}
+
+@layer base {
+  body {
+    @apply transition-colors duration-200;
+  }
+}

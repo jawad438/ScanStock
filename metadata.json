@@ -1,0 +1,5 @@
+{
+  "name": "ScanStock",
+  "description": "A minimal barcode scanner and inventory manager with multilingual support and dark mode.",
+  "requestFramePermissions": ["camera"]
+}

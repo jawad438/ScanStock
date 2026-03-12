@@ -43,9 +43,6 @@ export const translations: Record<Language, any> = {
     editProduct: 'Edit Product',
     confirmClearHistory: 'Are you sure you want to clear all history?',
     flashlight: 'Flashlight',
-    readNumbers: 'Read Numbers',
-    ocrScanning: 'Reading Numbers...',
-    typeBarcode: 'Type Barcode',
     dir: 'ltr'
   },
   fr: {
@@ -90,9 +87,6 @@ export const translations: Record<Language, any> = {
     editProduct: 'Modifier le produit',
     confirmClearHistory: 'Voulez-vous vraiment effacer tout l\'historique ?',
     flashlight: 'Lampe',
-    readNumbers: 'Lire les chiffres',
-    ocrScanning: 'Lecture des chiffres...',
-    typeBarcode: 'Saisir code-barres',
     dir: 'ltr'
   },
   ar: {
@@ -137,9 +131,6 @@ export const translations: Record<Language, any> = {
     editProduct: 'تعديل المنتج',
     confirmClearHistory: 'هل أنت متأكد أنك تريد مسح كل السجل؟',
     flashlight: 'المصباح',
-    readNumbers: 'قراءة الأرقام',
-    ocrScanning: 'جاري قراءة الأرقام...',
-    typeBarcode: 'كتابة الباركود',
     dir: 'rtl'
   }
 };

@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Html5Qrcode } from 'html5-qrcode';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { 
   Settings, Camera, Upload, Trash2, Plus, Minus, X, Sun, Moon, Monitor,
-  Globe, Database, History, ShoppingCart, Save, CheckCircle2, ChevronRight
+  Globe, Database, History, ShoppingCart, Save, CheckCircle2, ChevronRight,
+  Zap, ZapOff
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -44,6 +45,8 @@ export default function App() {
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
   const [manualEntry, setManualEntry] = useState({ name: '', price: '', quantity: '1' });
   const [isScanning, setIsScanning] = useState(false);
+  const [isTorchOn, setIsTorchOn] = useState(false);
+  const [hasTorch, setHasTorch] = useState(false);
   const [lastScanned, setLastScanned] = useState<string | null>(null);
   const [registeringProduct, setRegisteringProduct] = useState<{barcode: string, name: string, price: string} | null>(null);
   const [editingProduct, setEditingProduct] = useState<DatabaseItem | null>(null);
@@ -273,6 +276,9 @@ export default function App() {
 
   const startScanner = async () => {
     setIsScanning(true);
+    setIsTorchOn(false);
+    setHasTorch(false);
+    
     // Wait for React to render the #reader element
     setTimeout(async () => {
       try {
@@ -281,25 +287,69 @@ export default function App() {
           throw new Error("HTML Element with id=reader not found");
         }
 
-        const html5QrCode = new Html5Qrcode("reader");
+        const html5QrCode = new Html5Qrcode("reader", {
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.EAN_13,
+            Html5QrcodeSupportedFormats.EAN_8,
+            Html5QrcodeSupportedFormats.UPC_A,
+            Html5QrcodeSupportedFormats.UPC_E,
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.QR_CODE
+          ],
+          verbose: false
+        });
         scannerRef.current = html5QrCode;
         
         await html5QrCode.start(
           { facingMode: "environment" },
           {
-            fps: 10,
-            qrbox: { width: 250, height: 250 }
-          },
+            fps: 20, // Increased FPS for faster detection
+            qrbox: (viewfinderWidth, viewfinderHeight) => {
+              // Larger scanning area for distorted products
+              const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+              const size = Math.floor(minEdge * 0.8);
+              return { width: size, height: size };
+            },
+            aspectRatio: 1.0,
+            experimentalFeatures: {
+              useBarCodeDetectorIfSupported: true // Use native API if available (much better for distortions)
+            }
+          } as any,
           (decodedText) => {
             handleScan(decodedText);
           },
           () => {}
         );
+
+        // Check for torch capability after start
+        try {
+          const track = html5QrCode.getRunningTrackCapabilities();
+          if (track && (track as any).torch) {
+            setHasTorch(true);
+          }
+        } catch (e) {
+          console.log("Torch not supported or error checking", e);
+        }
+
       } catch (err) {
         console.error("Failed to start scanner", err);
         setIsScanning(false);
       }
     }, 100);
+  };
+
+  const toggleTorch = async () => {
+    if (!scannerRef.current || !hasTorch) return;
+    try {
+      const nextTorch = !isTorchOn;
+      await scannerRef.current.applyVideoConstraints({
+        advanced: [{ torch: nextTorch } as any]
+      });
+      setIsTorchOn(nextTorch);
+    } catch (err) {
+      console.error("Failed to toggle torch", err);
+    }
   };
 
   const stopScanner = async () => {
@@ -388,12 +438,27 @@ export default function App() {
                   </button>
                 )}
                 {isScanning && (
-                  <button 
-                    onClick={stopScanner}
-                    className="absolute bottom-6 left-1/2 -translate-x-1/2 px-6 py-2 bg-white/20 backdrop-blur-md border border-white/30 rounded-full text-white text-sm font-bold uppercase tracking-wider"
-                  >
-                    {t.stopScanning}
-                  </button>
+                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3">
+                    <button 
+                      onClick={stopScanner}
+                      className="px-6 py-2 bg-white/20 backdrop-blur-md border border-white/30 rounded-full text-white text-sm font-bold uppercase tracking-wider"
+                    >
+                      {t.stopScanning}
+                    </button>
+                    {hasTorch && (
+                      <button 
+                        onClick={toggleTorch}
+                        className={cn(
+                          "p-2 rounded-full backdrop-blur-md border transition-all",
+                          isTorchOn 
+                            ? "bg-emerald-500 border-emerald-400 text-white" 
+                            : "bg-white/20 border-white/30 text-white"
+                        )}
+                      >
+                        {isTorchOn ? <Zap className="w-5 h-5" /> : <ZapOff className="w-5 h-5" />}
+                      </button>
+                    )}
+                  </div>
                 )}
                 
                 <AnimatePresence>
@@ -479,12 +544,27 @@ export default function App() {
               {isScanning && (
                 <div className="relative aspect-square max-w-sm mx-auto bg-stone-200 rounded-[2.5rem] overflow-hidden shadow-2xl mb-6">
                   <div id="reader" className="w-full h-full"></div>
-                  <button 
-                    onClick={stopScanner}
-                    className="absolute bottom-6 left-1/2 -translate-x-1/2 px-6 py-2 bg-white/20 backdrop-blur-md border border-white/30 rounded-full text-white text-sm font-bold uppercase tracking-wider"
-                  >
-                    {t.stopScanning}
-                  </button>
+                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3">
+                    <button 
+                      onClick={stopScanner}
+                      className="px-6 py-2 bg-white/20 backdrop-blur-md border border-white/30 rounded-full text-white text-sm font-bold uppercase tracking-wider"
+                    >
+                      {t.stopScanning}
+                    </button>
+                    {hasTorch && (
+                      <button 
+                        onClick={toggleTorch}
+                        className={cn(
+                          "p-2 rounded-full backdrop-blur-md border transition-all",
+                          isTorchOn 
+                            ? "bg-emerald-500 border-emerald-400 text-white" 
+                            : "bg-white/20 border-white/30 text-white"
+                        )}
+                      >
+                        {isTorchOn ? <Zap className="w-5 h-5" /> : <ZapOff className="w-5 h-5" />}
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
               <div className="flex items-center justify-between">

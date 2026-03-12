@@ -42,6 +42,7 @@ export const translations: Record<Language, any> = {
     edit: 'Edit',
     editProduct: 'Edit Product',
     confirmClearHistory: 'Are you sure you want to clear all history?',
+    flashlight: 'Flashlight',
     dir: 'ltr'
   },
   fr: {
@@ -85,6 +86,7 @@ export const translations: Record<Language, any> = {
     edit: 'Modifier',
     editProduct: 'Modifier le produit',
     confirmClearHistory: 'Voulez-vous vraiment effacer tout l\'historique ?',
+    flashlight: 'Lampe',
     dir: 'ltr'
   },
   ar: {
@@ -128,6 +130,7 @@ export const translations: Record<Language, any> = {
     edit: 'تعديل',
     editProduct: 'تعديل المنتج',
     confirmClearHistory: 'هل أنت متأكد أنك تريد مسح كل السجل؟',
+    flashlight: 'المصباح',
     dir: 'rtl'
   }
 };

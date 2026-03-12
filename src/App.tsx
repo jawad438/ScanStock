@@ -138,12 +138,12 @@ export default function App() {
       const oscillator = audioCtx.createOscillator();
       const gainNode = audioCtx.createGain();
 
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5 note
+      oscillator.type = 'triangle';
+      oscillator.frequency.setValueAtTime(1200, audioCtx.currentTime); // Higher frequency for better audibility
       
       gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
-      gainNode.gain.linearRampToValueAtTime(0.8, audioCtx.currentTime + 0.05);
-      gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.15);
+      gainNode.gain.linearRampToValueAtTime(3.0, audioCtx.currentTime + 0.02); // Much higher gain
+      gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.2); // Slightly longer decay
 
       oscillator.connect(gainNode);
       gainNode.connect(audioCtx.destination);

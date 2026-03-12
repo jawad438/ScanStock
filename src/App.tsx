@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
+import { createWorker } from 'tesseract.js';
 import { 
   Settings, Camera, Upload, Trash2, Plus, Minus, X, Sun, Moon, Monitor,
   Globe, Database, History, ShoppingCart, Save, CheckCircle2, ChevronRight,
-  Zap, ZapOff
+  Zap, ZapOff, Hash, Type, Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -47,6 +48,9 @@ export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [isTorchOn, setIsTorchOn] = useState(false);
   const [hasTorch, setHasTorch] = useState(false);
+  const [isOCRScanning, setIsOCRScanning] = useState(false);
+  const [manualBarcode, setManualBarcode] = useState('');
+  const [isManualBarcodeOpen, setIsManualBarcodeOpen] = useState(false);
   const [lastScanned, setLastScanned] = useState<string | null>(null);
   const [registeringProduct, setRegisteringProduct] = useState<{barcode: string, name: string, price: string} | null>(null);
   const [editingProduct, setEditingProduct] = useState<DatabaseItem | null>(null);
@@ -352,6 +356,63 @@ export default function App() {
     }
   };
 
+  const performOCR = async () => {
+    if (!isScanning || isOCRScanning) return;
+    
+    const video = document.querySelector('#reader video') as HTMLVideoElement;
+    if (!video) return;
+
+    setIsOCRScanning(true);
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      
+      ctx.drawImage(video, 0, 0);
+      
+      // Crop to the center area where the barcode/numbers usually are
+      const cropWidth = canvas.width * 0.8;
+      const cropHeight = canvas.height * 0.4;
+      const cropX = (canvas.width - cropWidth) / 2;
+      const cropY = (canvas.height - cropHeight) / 2;
+      
+      const croppedCanvas = document.createElement('canvas');
+      croppedCanvas.width = cropWidth;
+      croppedCanvas.height = cropHeight;
+      const croppedCtx = croppedCanvas.getContext('2d');
+      if (croppedCtx) {
+        croppedCtx.drawImage(canvas, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+      }
+
+      const worker = await createWorker('eng');
+      await worker.setParameters({
+        tessedit_char_whitelist: '0123456789',
+      });
+      
+      const { data: { text } } = await worker.recognize(croppedCanvas);
+      await worker.terminate();
+
+      // Clean up text to find sequences of digits (EAN-13, EAN-8, etc)
+      const digits = text.replace(/\D/g, '');
+      if (digits.length >= 8) {
+        // Find the most likely barcode sequence (8, 12, or 13 digits)
+        const match = digits.match(/\d{13}|\d{12}|\d{8}/);
+        if (match) {
+          handleScan(match[0]);
+        } else {
+          // If no perfect match, just take the first 13 or 8 digits
+          handleScan(digits.slice(0, 13));
+        }
+      }
+    } catch (err) {
+      console.error("OCR Error", err);
+    } finally {
+      setIsOCRScanning(false);
+    }
+  };
+
   const stopScanner = async () => {
     if (scannerRef.current) {
       try {
@@ -438,26 +499,46 @@ export default function App() {
                   </button>
                 )}
                 {isScanning && (
-                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3">
-                    <button 
-                      onClick={stopScanner}
-                      className="px-6 py-2 bg-white/20 backdrop-blur-md border border-white/30 rounded-full text-white text-sm font-bold uppercase tracking-wider"
-                    >
-                      {t.stopScanning}
-                    </button>
-                    {hasTorch && (
+                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-4 w-full px-6">
+                    <div className="flex items-center gap-3">
                       <button 
-                        onClick={toggleTorch}
-                        className={cn(
-                          "p-2 rounded-full backdrop-blur-md border transition-all",
-                          isTorchOn 
-                            ? "bg-emerald-500 border-emerald-400 text-white" 
-                            : "bg-white/20 border-white/30 text-white"
-                        )}
+                        onClick={stopScanner}
+                        className="px-6 py-2 bg-white/20 backdrop-blur-md border border-white/30 rounded-full text-white text-sm font-bold uppercase tracking-wider"
                       >
-                        {isTorchOn ? <Zap className="w-5 h-5" /> : <ZapOff className="w-5 h-5" />}
+                        {t.stopScanning}
                       </button>
-                    )}
+                      {hasTorch && (
+                        <button 
+                          onClick={toggleTorch}
+                          className={cn(
+                            "p-2 rounded-full backdrop-blur-md border transition-all",
+                            isTorchOn 
+                              ? "bg-emerald-500 border-emerald-400 text-white" 
+                              : "bg-white/20 border-white/30 text-white"
+                          )}
+                        >
+                          {isTorchOn ? <Zap className="w-5 h-5" /> : <ZapOff className="w-5 h-5" />}
+                        </button>
+                      )}
+                    </div>
+                    
+                    <div className="flex items-center gap-2 w-full max-w-xs">
+                      <button 
+                        onClick={performOCR}
+                        disabled={isOCRScanning}
+                        className="flex-1 flex items-center justify-center gap-2 py-3 bg-emerald-500 text-white rounded-2xl font-bold text-xs uppercase tracking-widest shadow-lg shadow-emerald-500/20 disabled:opacity-50"
+                      >
+                        {isOCRScanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Hash className="w-4 h-4" />}
+                        {isOCRScanning ? t.ocrScanning : t.readNumbers}
+                      </button>
+                      <button 
+                        onClick={() => setIsManualBarcodeOpen(true)}
+                        className="p-3 bg-white/20 backdrop-blur-md border border-white/30 rounded-2xl text-white"
+                        title={t.typeBarcode}
+                      >
+                        <Type className="w-5 h-5" />
+                      </button>
+                    </div>
                   </div>
                 )}
                 
@@ -544,26 +625,37 @@ export default function App() {
               {isScanning && (
                 <div className="relative aspect-square max-w-sm mx-auto bg-stone-200 rounded-[2.5rem] overflow-hidden shadow-2xl mb-6">
                   <div id="reader" className="w-full h-full"></div>
-                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3">
-                    <button 
-                      onClick={stopScanner}
-                      className="px-6 py-2 bg-white/20 backdrop-blur-md border border-white/30 rounded-full text-white text-sm font-bold uppercase tracking-wider"
-                    >
-                      {t.stopScanning}
-                    </button>
-                    {hasTorch && (
+                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-4 w-full px-6">
+                    <div className="flex items-center gap-3">
                       <button 
-                        onClick={toggleTorch}
-                        className={cn(
-                          "p-2 rounded-full backdrop-blur-md border transition-all",
-                          isTorchOn 
-                            ? "bg-emerald-500 border-emerald-400 text-white" 
-                            : "bg-white/20 border-white/30 text-white"
-                        )}
+                        onClick={stopScanner}
+                        className="px-6 py-2 bg-white/20 backdrop-blur-md border border-white/30 rounded-full text-white text-sm font-bold uppercase tracking-wider"
                       >
-                        {isTorchOn ? <Zap className="w-5 h-5" /> : <ZapOff className="w-5 h-5" />}
+                        {t.stopScanning}
                       </button>
-                    )}
+                      {hasTorch && (
+                        <button 
+                          onClick={toggleTorch}
+                          className={cn(
+                            "p-2 rounded-full backdrop-blur-md border transition-all",
+                            isTorchOn 
+                              ? "bg-emerald-500 border-emerald-400 text-white" 
+                              : "bg-white/20 border-white/30 text-white"
+                          )}
+                        >
+                          {isTorchOn ? <Zap className="w-5 h-5" /> : <ZapOff className="w-5 h-5" />}
+                        </button>
+                      )}
+                    </div>
+                    
+                    <button 
+                      onClick={performOCR}
+                      disabled={isOCRScanning}
+                      className="w-full max-w-xs flex items-center justify-center gap-2 py-3 bg-emerald-500 text-white rounded-2xl font-bold text-xs uppercase tracking-widest shadow-lg shadow-emerald-500/20 disabled:opacity-50"
+                    >
+                      {isOCRScanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Hash className="w-4 h-4" />}
+                      {isOCRScanning ? t.ocrScanning : t.readNumbers}
+                    </button>
                   </div>
                 </div>
               )}
@@ -855,6 +947,49 @@ export default function App() {
               <div className="flex gap-3 mt-8">
                 <button onClick={() => setEditingProduct(null)} className="flex-1 py-4 rounded-2xl font-bold uppercase text-stone-500">{t.cancel}</button>
                 <button onClick={updateProduct} className="flex-2 py-4 bg-emerald-500 text-white rounded-2xl font-bold uppercase tracking-widest shadow-lg shadow-emerald-500/20">{t.save}</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Manual Barcode Entry Modal */}
+        {isManualBarcodeOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-6">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsManualBarcodeOpen(false)} className="absolute inset-0 bg-stone-950/60 backdrop-blur-md" />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-md bg-stone-950 rounded-[3rem] p-8 shadow-2xl"
+            >
+              <h2 className="text-2xl font-black uppercase tracking-tighter mb-6">{t.typeBarcode}</h2>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-stone-500 uppercase ml-2">{t.barcode}</label>
+                  <input 
+                    autoFocus
+                    type="number"
+                    value={manualBarcode}
+                    onChange={e => setManualBarcode(e.target.value)}
+                    placeholder="e.g. 6131234567890"
+                    className="w-full p-4 bg-stone-200 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-3 mt-8">
+                <button onClick={() => setIsManualBarcodeOpen(false)} className="flex-1 py-4 rounded-2xl font-bold uppercase text-stone-500">{t.cancel}</button>
+                <button 
+                  onClick={() => {
+                    if (manualBarcode) {
+                      handleScan(manualBarcode);
+                      setIsManualBarcodeOpen(false);
+                      setManualBarcode('');
+                    }
+                  }}
+                  className="flex-2 py-4 bg-emerald-500 text-white rounded-2xl font-bold uppercase tracking-widest shadow-lg shadow-emerald-500/20"
+                >
+                  {t.save}
+                </button>
               </div>
             </motion.div>
           </div>

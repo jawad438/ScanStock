@@ -46,6 +46,7 @@ export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [lastScanned, setLastScanned] = useState<string | null>(null);
   const [registeringProduct, setRegisteringProduct] = useState<{barcode: string, name: string, price: string} | null>(null);
+  const [editingProduct, setEditingProduct] = useState<DatabaseItem | null>(null);
   
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const databaseRef = useRef<DatabaseItem[]>(database);
@@ -128,6 +129,29 @@ export default function App() {
   }, [settings.theme, settings.language, t.dir]);
 
   // --- Logic ---
+  const playScanSound = () => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5 note
+      
+      gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+      gainNode.gain.linearRampToValueAtTime(0.2, audioCtx.currentTime + 0.05);
+      gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.15);
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.15);
+    } catch (e) {
+      console.error("Audio error", e);
+    }
+  };
+
   const handleScan = (rawBarcode: string) => {
     const barcode = rawBarcode.trim();
     
@@ -141,6 +165,7 @@ export default function App() {
       return;
     }
 
+    playScanSound();
     lastDetectedBarcode.current = barcode;
     if (clearBarcodeTimeout.current) clearTimeout(clearBarcodeTimeout.current);
     clearBarcodeTimeout.current = setTimeout(() => {
@@ -198,6 +223,18 @@ export default function App() {
       return [newItem, ...filtered];
     });
     setRegisteringProduct(null);
+  };
+
+  const updateProduct = () => {
+    if (!editingProduct) return;
+    setDatabase(prev => prev.map(d => d.barcode === editingProduct.barcode ? editingProduct : d));
+    setEditingProduct(null);
+  };
+
+  const clearHistory = () => {
+    if (window.confirm(t.confirmClearHistory)) {
+      setHistory([]);
+    }
   };
 
   const checkout = () => {
@@ -474,9 +511,20 @@ export default function App() {
                         <h3 className="font-bold text-lg">{item.name}</h3>
                         <p className="text-sm text-stone-500 font-mono">{item.barcode}</p>
                       </div>
-                      <div className="text-right">
+                      <div className="text-right flex flex-col items-end gap-2">
                         <p className="text-xl font-black text-emerald-500">{item.price} {settings.currency}</p>
-                        <button onClick={() => setDatabase(prev => prev.filter(d => d.barcode !== item.barcode))} className="text-stone-500 mt-2"><Trash2 className="w-4 h-4" /></button>
+                        <div className="flex items-center gap-2">
+                          <button 
+                            onClick={() => setEditingProduct(item)} 
+                            className="p-2 rounded-xl bg-stone-300 hover:bg-stone-400 transition-colors text-stone-700"
+                          >
+                            <Plus className="w-4 h-4 rotate-45" style={{ transform: 'rotate(0deg)' }} />
+                            <span className="text-[10px] font-bold uppercase">{t.edit}</span>
+                          </button>
+                          <button onClick={() => setDatabase(prev => prev.filter(d => d.barcode !== item.barcode))} className="p-2 rounded-xl bg-red-100 hover:bg-red-200 transition-colors text-red-600">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))
@@ -495,7 +543,16 @@ export default function App() {
             >
               <div className="flex items-center justify-between">
                 <h2 className="text-2xl font-black uppercase tracking-tighter">{t.history}</h2>
-                <span className="text-xs font-bold text-stone-500 uppercase tracking-widest">{t.last30Days}</span>
+                <div className="flex items-center gap-3">
+                  <button 
+                    onClick={clearHistory}
+                    className="p-2 rounded-xl bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
+                    title={t.clearHistory}
+                  >
+                    <Trash2 className="w-5 h-5" />
+                  </button>
+                  <span className="text-xs font-bold text-stone-500 uppercase tracking-widest">{t.last30Days}</span>
+                </div>
               </div>
 
               <div className="space-y-4">
@@ -675,6 +732,49 @@ export default function App() {
               <div className="flex gap-3 mt-8">
                 <button onClick={() => setRegisteringProduct(null)} className="flex-1 py-4 rounded-2xl font-bold uppercase text-stone-500">{t.cancel}</button>
                 <button onClick={saveToDatabase} className="flex-2 py-4 bg-emerald-500 text-white rounded-2xl font-bold uppercase tracking-widest shadow-lg shadow-emerald-500/20">{t.save}</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Edit Product Modal */}
+        {editingProduct && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-6">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-stone-950/60 backdrop-blur-md" />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-md bg-stone-950 rounded-[3rem] p-8 shadow-2xl"
+            >
+              <h2 className="text-2xl font-black uppercase tracking-tighter mb-6">{t.editProduct}</h2>
+              <div className="space-y-4">
+                <div className="p-4 bg-stone-200 rounded-2xl">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase mb-1">{t.barcode}</p>
+                  <p className="font-mono font-bold">{editingProduct.barcode}</p>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-stone-500 uppercase ml-2">{t.productName}</label>
+                  <input 
+                    autoFocus
+                    value={editingProduct.name}
+                    onChange={e => setEditingProduct({...editingProduct, name: e.target.value})}
+                    className="w-full p-4 bg-stone-200 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-stone-500 uppercase ml-2">{t.productPrice}</label>
+                  <input 
+                    type="number"
+                    value={editingProduct.price}
+                    onChange={e => setEditingProduct({...editingProduct, price: parseFloat(e.target.value) || 0})}
+                    className="w-full p-4 bg-stone-200 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-3 mt-8">
+                <button onClick={() => setEditingProduct(null)} className="flex-1 py-4 rounded-2xl font-bold uppercase text-stone-500">{t.cancel}</button>
+                <button onClick={updateProduct} className="flex-2 py-4 bg-emerald-500 text-white rounded-2xl font-bold uppercase tracking-widest shadow-lg shadow-emerald-500/20">{t.save}</button>
               </div>
             </motion.div>
           </div>

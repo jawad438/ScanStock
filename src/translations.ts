@@ -38,6 +38,10 @@ export const translations: Record<Language, any> = {
     noHistory: 'No sales history found',
     items: 'items',
     currency: 'Currency',
+    clearHistory: 'Clear History',
+    edit: 'Edit',
+    editProduct: 'Edit Product',
+    confirmClearHistory: 'Are you sure you want to clear all history?',
     dir: 'ltr'
   },
   fr: {
@@ -77,6 +81,10 @@ export const translations: Record<Language, any> = {
     noHistory: 'Aucun historique de vente',
     items: 'articles',
     currency: 'Devise',
+    clearHistory: 'Effacer l\'historique',
+    edit: 'Modifier',
+    editProduct: 'Modifier le produit',
+    confirmClearHistory: 'Voulez-vous vraiment effacer tout l\'historique ?',
     dir: 'ltr'
   },
   ar: {
@@ -116,6 +124,10 @@ export const translations: Record<Language, any> = {
     noHistory: 'لا يوجد سجل مبيعات',
     items: 'عناصر',
     currency: 'العملة',
+    clearHistory: 'مسح السجل',
+    edit: 'تعديل',
+    editProduct: 'تعديل المنتج',
+    confirmClearHistory: 'هل أنت متأكد أنك تريد مسح كل السجل؟',
     dir: 'rtl'
   }
 };

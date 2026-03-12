@@ -56,9 +56,6 @@ export default function App() {
   const [editingProduct, setEditingProduct] = useState<DatabaseItem | null>(null);
   
   const scannerRef = useRef<Html5Qrcode | null>(null);
-  const workerRef = useRef<any>(null);
-  const autoOCRIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const lastSuccessTimeRef = useRef<number>(Date.now());
   const databaseRef = useRef<DatabaseItem[]>(database);
   const lastDetectedBarcode = useRef<string | null>(null);
   const clearBarcodeTimeout = useRef<NodeJS.Timeout | null>(null);
@@ -164,7 +161,6 @@ export default function App() {
 
   const handleScan = (rawBarcode: string) => {
     const barcode = rawBarcode.trim();
-    lastSuccessTimeRef.current = Date.now();
     
     // Prevent spam scanning: only add if it's a new detection
     if (barcode === lastDetectedBarcode.current) {
@@ -286,22 +282,7 @@ export default function App() {
     setIsScanning(true);
     setIsTorchOn(false);
     setHasTorch(false);
-    lastSuccessTimeRef.current = Date.now();
     
-    // Initialize Tesseract worker in background
-    const initWorker = async () => {
-      try {
-        const worker = await createWorker('eng');
-        await worker.setParameters({
-          tessedit_char_whitelist: '0123456789',
-        });
-        workerRef.current = worker;
-      } catch (e) {
-        console.error("Failed to init OCR worker", e);
-      }
-    };
-    initWorker();
-
     // Wait for React to render the #reader element
     setTimeout(async () => {
       try {
@@ -342,10 +323,7 @@ export default function App() {
           (decodedText) => {
             handleScan(decodedText);
           },
-          () => {
-            // On scan error (no barcode found this frame)
-            // We don't do anything here, the interval handles auto-OCR
-          }
+          () => {}
         );
 
         // Check for torch capability after start
@@ -357,15 +335,6 @@ export default function App() {
         } catch (e) {
           console.log("Torch not supported or error checking", e);
         }
-
-        // Start Auto-OCR interval
-        autoOCRIntervalRef.current = setInterval(() => {
-          const timeSinceLastSuccess = Date.now() - lastSuccessTimeRef.current;
-          // If no barcode found for 4 seconds, try OCR automatically
-          if (timeSinceLastSuccess > 4000) {
-            performOCR();
-          }
-        }, 3000);
 
       } catch (err) {
         console.error("Failed to start scanner", err);
@@ -417,18 +386,13 @@ export default function App() {
         croppedCtx.drawImage(canvas, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
       }
 
-      let worker = workerRef.current;
-      let createdLocally = false;
-      if (!worker) {
-        worker = await createWorker('eng');
-        await worker.setParameters({
-          tessedit_char_whitelist: '0123456789',
-        });
-        createdLocally = true;
-      }
+      const worker = await createWorker('eng');
+      await worker.setParameters({
+        tessedit_char_whitelist: '0123456789',
+      });
       
       const { data: { text } } = await worker.recognize(croppedCanvas);
-      if (createdLocally) await worker.terminate();
+      await worker.terminate();
 
       // Clean up text to find sequences of digits (EAN-13, EAN-8, etc)
       const digits = text.replace(/\D/g, '');
@@ -437,7 +401,8 @@ export default function App() {
         const match = digits.match(/\d{13}|\d{12}|\d{8}/);
         if (match) {
           handleScan(match[0]);
-        } else if (digits.length >= 12) {
+        } else {
+          // If no perfect match, just take the first 13 or 8 digits
           handleScan(digits.slice(0, 13));
         }
       }
@@ -449,16 +414,6 @@ export default function App() {
   };
 
   const stopScanner = async () => {
-    if (autoOCRIntervalRef.current) {
-      clearInterval(autoOCRIntervalRef.current);
-      autoOCRIntervalRef.current = null;
-    }
-    if (workerRef.current) {
-      try {
-        await workerRef.current.terminate();
-        workerRef.current = null;
-      } catch (e) {}
-    }
     if (scannerRef.current) {
       try {
         await scannerRef.current.stop();

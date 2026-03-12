@@ -27,4 +27,5 @@ export interface SaleRecord {
 export interface AppSettings {
   language: Language;
   theme: Theme;
+  currency: string;
 }

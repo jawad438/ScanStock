@@ -37,6 +37,7 @@ export const translations: Record<Language, any> = {
     last30Days: 'Last 30 Days',
     noHistory: 'No sales history found',
     items: 'items',
+    currency: 'Currency',
     dir: 'ltr'
   },
   fr: {
@@ -75,6 +76,7 @@ export const translations: Record<Language, any> = {
     last30Days: '30 derniers jours',
     noHistory: 'Aucun historique de vente',
     items: 'articles',
+    currency: 'Devise',
     dir: 'ltr'
   },
   ar: {
@@ -113,6 +115,7 @@ export const translations: Record<Language, any> = {
     last30Days: 'آخر 30 يوم',
     noHistory: 'لا يوجد سجل مبيعات',
     items: 'عناصر',
+    currency: 'العملة',
     dir: 'rtl'
   }
 };

@@ -37,7 +37,7 @@ export default function App() {
 
   const [settings, setSettings] = useState<AppSettings>(() => {
     const saved = localStorage.getItem('scanstock_settings');
-    return saved ? JSON.parse(saved) : { language: 'en', theme: 'system' };
+    return saved ? JSON.parse(saved) : { language: 'en', theme: 'system', currency: 'DZD' };
   });
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -49,6 +49,8 @@ export default function App() {
   
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const databaseRef = useRef<DatabaseItem[]>(database);
+  const lastDetectedBarcode = useRef<string | null>(null);
+  const clearBarcodeTimeout = useRef<NodeJS.Timeout | null>(null);
   const t = translations[settings.language];
 
   // --- Effects ---
@@ -129,6 +131,22 @@ export default function App() {
   const handleScan = (rawBarcode: string) => {
     const barcode = rawBarcode.trim();
     
+    // Prevent spam scanning: only add if it's a new detection
+    if (barcode === lastDetectedBarcode.current) {
+      // Reset the "clear" timeout because we still see it
+      if (clearBarcodeTimeout.current) clearTimeout(clearBarcodeTimeout.current);
+      clearBarcodeTimeout.current = setTimeout(() => {
+        lastDetectedBarcode.current = null;
+      }, 1500);
+      return;
+    }
+
+    lastDetectedBarcode.current = barcode;
+    if (clearBarcodeTimeout.current) clearTimeout(clearBarcodeTimeout.current);
+    clearBarcodeTimeout.current = setTimeout(() => {
+      lastDetectedBarcode.current = null;
+    }, 1500);
+
     if (activeTab === 'database') {
       setRegisteringProduct({ barcode, name: '', price: '' });
       stopScanner();
@@ -394,7 +412,7 @@ export default function App() {
                           <div className="flex items-center gap-2 text-xs text-stone-500 mt-1">
                             <span className="font-mono">{item.barcode}</span>
                             <span>•</span>
-                            <span className="font-bold text-emerald-600">${item.price}</span>
+                            <span className="font-bold text-emerald-600">{item.price} {settings.currency}</span>
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
@@ -457,7 +475,7 @@ export default function App() {
                         <p className="text-sm text-stone-500 font-mono">{item.barcode}</p>
                       </div>
                       <div className="text-right">
-                        <p className="text-xl font-black text-emerald-500">${item.price}</p>
+                        <p className="text-xl font-black text-emerald-500">{item.price} {settings.currency}</p>
                         <button onClick={() => setDatabase(prev => prev.filter(d => d.barcode !== item.barcode))} className="text-stone-500 mt-2"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </div>
@@ -493,7 +511,7 @@ export default function App() {
                           <p className="text-xs font-bold text-stone-500 uppercase">{new Date(record.timestamp).toLocaleString(settings.language)}</p>
                           <p className="font-bold text-stone-500">{record.items.length} {t.items}</p>
                         </div>
-                        <p className="text-2xl font-black text-emerald-500">${record.total.toFixed(2)}</p>
+                        <p className="text-2xl font-black text-emerald-500">{record.total.toFixed(2)} {settings.currency}</p>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {record.items.slice(0, 3).map(item => (
@@ -544,7 +562,7 @@ export default function App() {
         >
           <div className="pl-2">
             <p className="text-[10px] font-bold text-stone-900/60 uppercase tracking-widest">{t.total}</p>
-            <p className="text-xl font-black text-stone-900">${totalAmount.toFixed(2)}</p>
+            <p className="text-xl font-black text-stone-900">{totalAmount.toFixed(2)} {settings.currency}</p>
           </div>
           <button 
             onClick={checkout}
@@ -714,6 +732,26 @@ export default function App() {
                         {theme === 'dark' && <Moon className="w-4 h-4" />}
                         {theme === 'system' && <Monitor className="w-4 h-4" />}
                         {t[theme].toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest ml-2">{t.currency}</label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {['USD', 'EUR', 'GBP', 'DZD'].map((curr) => (
+                      <button
+                        key={curr}
+                        onClick={() => setSettings(s => ({ ...s, currency: curr }))}
+                        className={cn(
+                          "py-3 rounded-2xl border-2 transition-all font-bold text-xs",
+                          settings.currency === curr 
+                            ? "border-emerald-500 bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400"
+                            : "border-stone-200"
+                        )}
+                      >
+                        {curr}
                       </button>
                     ))}
                   </div>

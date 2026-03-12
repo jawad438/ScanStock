@@ -48,9 +48,22 @@ export default function App() {
   const [registeringProduct, setRegisteringProduct] = useState<{barcode: string, name: string, price: string} | null>(null);
   
   const scannerRef = useRef<Html5Qrcode | null>(null);
+  const databaseRef = useRef<DatabaseItem[]>(database);
   const t = translations[settings.language];
 
   // --- Effects ---
+  useEffect(() => {
+    databaseRef.current = database;
+    
+    // Sync items with database when database changes (e.g. unknown items get names)
+    setItems(prev => prev.map(item => {
+      const dbItem = database.find(d => d.barcode === item.barcode);
+      if (dbItem && (item.name.startsWith(t.unknownItem) || item.price === 0)) {
+        return { ...item, name: dbItem.name, price: dbItem.price };
+      }
+      return item;
+    }));
+  }, [database, t.unknownItem]);
   useEffect(() => {
     return () => {
       if (scannerRef.current) {
@@ -113,22 +126,29 @@ export default function App() {
   }, [settings.theme, settings.language, t.dir]);
 
   // --- Logic ---
-  const handleScan = (barcode: string) => {
+  const handleScan = (rawBarcode: string) => {
+    const barcode = rawBarcode.trim();
+    
     if (activeTab === 'database') {
       setRegisteringProduct({ barcode, name: '', price: '' });
       stopScanner();
       return;
     }
 
-    const dbItem = database.find(d => d.barcode === barcode);
+    const dbItem = databaseRef.current.find(d => d.barcode === barcode);
     
     setItems(prev => {
       const existingIndex = prev.findIndex(item => item.barcode === barcode);
       if (existingIndex > -1) {
         const newItems = [...prev];
+        const existingItem = newItems[existingIndex];
+        
+        // Update name and price from DB if it was previously unknown
         newItems[existingIndex] = {
-          ...newItems[existingIndex],
-          quantity: newItems[existingIndex].quantity + 1,
+          ...existingItem,
+          name: dbItem ? dbItem.name : existingItem.name,
+          price: dbItem ? dbItem.price : existingItem.price,
+          quantity: existingItem.quantity + 1,
           timestamp: Date.now()
         };
         return newItems;

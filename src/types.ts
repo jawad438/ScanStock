@@ -29,3 +29,8 @@ export interface AppSettings {
   theme: Theme;
   currency: string;
 }
+
+export interface UserProfile {
+  email: string;
+  token: string;
+}

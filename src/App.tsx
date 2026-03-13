@@ -3,19 +3,29 @@ import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { 
   Settings, Camera, Upload, Trash2, Plus, Minus, X, Sun, Moon, Monitor,
   Globe, Database, History, ShoppingCart, Save, CheckCircle2, ChevronRight,
-  Zap, ZapOff
+  Zap, ZapOff, Download, LogOut, FileSpreadsheet, ListPlus, Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { Language, Theme, Tab, InventoryItem, DatabaseItem, SaleRecord, AppSettings } from './types';
 import { translations } from './translations';
+import { auth } from './firebase';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import Auth from './components/Auth';
+import { getSupermarketData, saveSupermarketData } from './services/githubService';
+import * as XLSX from 'xlsx';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
 export default function App() {
+  // --- Auth State ---
+  const [user, setUser] = useState<{ email: string } | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+
   // --- State ---
   const [activeTab, setActiveTab] = useState<Tab>('scanner');
   const [items, setItems] = useState<InventoryItem[]>(() => {
@@ -23,10 +33,8 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
   
-  const [database, setDatabase] = useState<DatabaseItem[]>(() => {
-    const saved = localStorage.getItem('scanstock_database');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [database, setDatabase] = useState<DatabaseItem[]>([]);
+  const [token, setToken] = useState<string>('');
 
   const [history, setHistory] = useState<SaleRecord[]>(() => {
     const saved = localStorage.getItem('scanstock_history');
@@ -43,6 +51,8 @@ export default function App() {
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
+  const [isBulkAddOpen, setIsBulkAddOpen] = useState(false);
+  const [bulkItems, setBulkItems] = useState<{ barcode: string, name: string, price: string }[]>([]);
   const [manualEntry, setManualEntry] = useState({ name: '', price: '', quantity: '1' });
   const [isScanning, setIsScanning] = useState(false);
   const [isTorchOn, setIsTorchOn] = useState(false);
@@ -56,6 +66,46 @@ export default function App() {
   const lastDetectedBarcode = useRef<string | null>(null);
   const clearBarcodeTimeout = useRef<NodeJS.Timeout | null>(null);
   const t = translations[settings.language];
+
+  // --- Auth & Sync Effects ---
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser && firebaseUser.email) {
+        setUser({ email: firebaseUser.email });
+        // Fetch data from GitHub
+        setIsSyncing(true);
+        const data = await getSupermarketData(firebaseUser.email);
+        if (data) {
+          setDatabase(data.products);
+          setToken(data.token);
+        }
+        setIsSyncing(false);
+      } else {
+        setUser(null);
+        setDatabase([]);
+        setToken('');
+      }
+      setIsAuthReady(true);
+    });
+    return unsubscribe;
+  }, []);
+
+  const syncToGitHub = async (newDatabase: DatabaseItem[]) => {
+    if (!user) return;
+    setIsSyncing(true);
+    try {
+      await saveSupermarketData({
+        email: user.email,
+        token: token,
+        products: newDatabase
+      });
+    } catch (err) {
+      console.error("Sync error:", err);
+      alert("Failed to sync with GitHub. Please check your connection.");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // --- Effects ---
   useEffect(() => {
@@ -228,10 +278,50 @@ export default function App() {
     setRegisteringProduct(null);
   };
 
-  const updateProduct = () => {
+  const updateProduct = async () => {
     if (!editingProduct) return;
-    setDatabase(prev => prev.map(d => d.barcode === editingProduct.barcode ? editingProduct : d));
+    const newDatabase = database.map(d => d.barcode === editingProduct.barcode ? editingProduct : d);
+    setDatabase(newDatabase);
+    await syncToGitHub(newDatabase);
     setEditingProduct(null);
+  };
+
+  const handleBulkAdd = async () => {
+    const validBulkItems = bulkItems
+      .filter(item => item.barcode && item.name && item.price)
+      .map(item => ({
+        barcode: item.barcode,
+        name: item.name,
+        price: parseFloat(item.price) || 0
+      }));
+
+    if (validBulkItems.length === 0) return;
+
+    const newDatabase = [...database];
+    validBulkItems.forEach(newItem => {
+      const index = newDatabase.findIndex(d => d.barcode === newItem.barcode);
+      if (index > -1) {
+        newDatabase[index] = newItem;
+      } else {
+        newDatabase.push(newItem);
+      }
+    });
+
+    setDatabase(newDatabase);
+    await syncToGitHub(newDatabase);
+    setBulkItems([]);
+    setIsBulkAddOpen(false);
+  };
+
+  const exportToExcel = (data: any[], fileName: string) => {
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    XLSX.writeFile(wb, `${fileName}.xlsx`);
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
   };
 
   const clearHistory = () => {
@@ -392,24 +482,79 @@ export default function App() {
 
   const totalAmount = items.reduce((acc, item) => acc + item.price * item.quantity, 0);
 
+  if (!isAuthReady) {
+    return (
+      <div className="min-h-screen bg-stone-950 flex items-center justify-center">
+        <Loader2 className="w-12 h-12 text-emerald-500 animate-spin" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <Auth 
+        onAuthSuccess={(email) => setUser({ email })} 
+        language={settings.language}
+        setLanguage={(l) => setSettings(s => ({ ...s, language: l }))}
+        theme={settings.theme === 'system' ? 'dark' : settings.theme}
+        setTheme={(t) => setSettings(s => ({ ...s, theme: t }))}
+      />
+    );
+  }
+
   return (
-    <div className="fixed inset-0 bg-stone-950 text-stone-900 font-sans flex flex-col overflow-hidden">
+    <div 
+      dir={t.dir}
+      className={cn(
+        "fixed inset-0 font-sans flex flex-col overflow-hidden transition-colors duration-500",
+        settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          ? "bg-[#050404] text-white" 
+          : "bg-white text-[#050404]"
+      )}
+    >
       {/* Header */}
-      <header className="flex-none px-4 py-3 flex items-center justify-between border-b border-stone-200">
+      <header className={cn(
+        "flex-none px-4 py-3 flex items-center justify-between border-b",
+        settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          ? "border-white/5"
+          : "border-stone-200"
+      )}>
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center shadow-lg shadow-emerald-500/20">
             <svg viewBox="0 0 100 100" className="w-5 h-5 fill-white">
               <path d="M30 30h5v40h-5zM40 30h2v40h-2zM47 30h8v40h-8zM60 30h2v40h-2zM67 30h3v40h-3zM75 30h5v40h-5z" />
             </svg>
           </div>
-          <h1 className="text-xl font-black tracking-tighter uppercase">{t.title}</h1>
+          <div className="flex flex-col">
+            <h1 className="text-xl font-black tracking-tighter uppercase leading-none">{t.title}</h1>
+            <span className="text-[8px] font-bold text-stone-500 uppercase tracking-widest mt-1">{user.email}</span>
+          </div>
         </div>
-        <button 
-          onClick={() => setIsSettingsOpen(true)}
-          className="p-2 rounded-xl hover:bg-stone-200 transition-colors"
-        >
-          <Settings className="w-6 h-6" />
-        </button>
+        <div className="flex items-center gap-2">
+          {isSyncing && <Loader2 className="w-4 h-4 text-emerald-500 animate-spin" />}
+          <button 
+            onClick={() => setIsSettingsOpen(true)}
+            className={cn(
+              "p-2 rounded-xl transition-colors",
+              settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                ? "hover:bg-stone-900"
+                : "hover:bg-stone-100"
+            )}
+          >
+            <Settings className="w-6 h-6" />
+          </button>
+          <button 
+            onClick={handleLogout}
+            className={cn(
+              "p-2 rounded-xl transition-colors text-red-500",
+              settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                ? "hover:bg-stone-900"
+                : "hover:bg-stone-100"
+            )}
+          >
+            <LogOut className="w-6 h-6" />
+          </button>
+        </div>
       </header>
 
       {/* Main Content Area */}
@@ -424,7 +569,12 @@ export default function App() {
               className="p-4 space-y-4"
             >
               {/* Scanner View */}
-              <div className="relative aspect-square max-w-sm mx-auto bg-stone-200 rounded-[2.5rem] overflow-hidden shadow-2xl shadow-stone-200 dark:shadow-none">
+              <div className={cn(
+                "relative aspect-square max-w-sm mx-auto rounded-[2.5rem] overflow-hidden shadow-2xl transition-all",
+                settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                  ? "bg-stone-900 shadow-none border border-stone-800"
+                  : "bg-stone-100 shadow-stone-200"
+              )}>
                 <div id="reader" className="w-full h-full"></div>
                 {!isScanning && (
                   <button 
@@ -485,12 +635,22 @@ export default function App() {
                   <div className="flex items-center gap-2">
                     <button 
                       onClick={() => setIsManualEntryOpen(true)}
-                      className="p-2 rounded-xl bg-stone-200 hover:bg-stone-300 transition-colors"
+                      className={cn(
+                        "p-2 rounded-xl transition-colors",
+                        settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                          ? "bg-stone-900 hover:bg-stone-800"
+                          : "bg-stone-100 hover:bg-stone-200"
+                      )}
                       title={t.addItem}
                     >
                       <Plus className="w-5 h-5" />
                     </button>
-                    <label className="p-2 rounded-xl bg-stone-200 cursor-pointer hover:bg-stone-300 transition-colors">
+                    <label className={cn(
+                      "p-2 rounded-xl cursor-pointer transition-colors",
+                      settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                        ? "bg-stone-900 hover:bg-stone-800"
+                        : "bg-stone-100 hover:bg-stone-200"
+                    )}>
                       <Upload className="w-5 h-5" />
                       <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
                     </label>
@@ -507,7 +667,12 @@ export default function App() {
                       <motion.div 
                         layout
                         key={item.id}
-                        className="bg-stone-200 p-4 rounded-2xl flex items-center justify-between gap-4"
+                        className={cn(
+                          "p-4 rounded-2xl flex items-center justify-between gap-4 border transition-colors",
+                          settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                            ? "bg-stone-900 border-stone-800"
+                            : "bg-stone-50 border-stone-100"
+                        )}
                       >
                         <div className="flex-1 min-w-0">
                           <h3 className="font-bold truncate">{item.name}</h3>
@@ -518,7 +683,12 @@ export default function App() {
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
-                          <div className="flex items-center bg-stone-950 rounded-xl p-1 shadow-sm">
+                          <div className={cn(
+                            "flex items-center rounded-xl p-1 shadow-sm",
+                            settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                              ? "bg-stone-950"
+                              : "bg-white"
+                          )}>
                             <button onClick={() => setItems(prev => prev.map(i => i.id === item.id ? {...i, quantity: Math.max(1, i.quantity - 1)} : i))} className="p-1"><Minus className="w-4 h-4" /></button>
                             <span className="w-6 text-center font-bold text-sm">{item.quantity}</span>
                             <button onClick={() => setItems(prev => prev.map(i => i.id === item.id ? {...i, quantity: i.quantity + 1} : i))} className="p-1"><Plus className="w-4 h-4" /></button>
@@ -542,7 +712,12 @@ export default function App() {
               className="p-4 space-y-4"
             >
               {isScanning && (
-                <div className="relative aspect-square max-w-sm mx-auto bg-stone-200 rounded-[2.5rem] overflow-hidden shadow-2xl mb-6">
+                <div className={cn(
+                  "relative aspect-square max-w-sm mx-auto rounded-[2.5rem] overflow-hidden shadow-2xl mb-6",
+                  settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                    ? "bg-stone-900 border border-stone-800"
+                    : "bg-stone-100"
+                )}>
                   <div id="reader" className="w-full h-full"></div>
                   <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2">
                     <button 
@@ -569,14 +744,33 @@ export default function App() {
               )}
               <div className="flex items-center justify-between">
                 <h2 className="text-2xl font-black uppercase tracking-tighter">{t.database}</h2>
-                {!isScanning && (
+                <div className="flex items-center gap-2">
                   <button 
-                    onClick={startScanner}
-                    className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-bold text-sm uppercase tracking-wider shadow-lg shadow-emerald-500/20"
+                    onClick={() => exportToExcel(database, `database_${user.email}`)}
+                    className="p-2 rounded-xl bg-stone-200 hover:bg-stone-300 transition-colors text-stone-700"
+                    title="Export to Excel"
                   >
-                    {t.scanBarcode}
+                    <FileSpreadsheet className="w-5 h-5" />
                   </button>
-                )}
+                  <button 
+                    onClick={() => {
+                      setBulkItems([{ barcode: '', name: '', price: '' }]);
+                      setIsBulkAddOpen(true);
+                    }}
+                    className="p-2 rounded-xl bg-stone-200 hover:bg-stone-300 transition-colors text-stone-700"
+                    title="Bulk Add"
+                  >
+                    <ListPlus className="w-5 h-5" />
+                  </button>
+                  {!isScanning && (
+                    <button 
+                      onClick={startScanner}
+                      className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-bold text-sm uppercase tracking-wider shadow-lg shadow-emerald-500/20"
+                    >
+                      {t.scanBarcode}
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="grid gap-4">
@@ -586,7 +780,15 @@ export default function App() {
                   </div>
                 ) : (
                   database.map((item) => (
-                    <div key={item.barcode} className="bg-stone-200 p-5 rounded-3xl flex items-center justify-between">
+                    <div 
+                      key={item.barcode} 
+                      className={cn(
+                        "p-5 rounded-3xl flex items-center justify-between border transition-colors",
+                        settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                          ? "bg-stone-900 border-stone-800"
+                          : "bg-stone-50 border-stone-100"
+                      )}
+                    >
                       <div>
                         <h3 className="font-bold text-lg">{item.name}</h3>
                         <p className="text-sm text-stone-500 font-mono">{item.barcode}</p>
@@ -596,12 +798,17 @@ export default function App() {
                         <div className="flex items-center gap-2">
                           <button 
                             onClick={() => setEditingProduct(item)} 
-                            className="p-2 rounded-xl bg-stone-300 hover:bg-stone-400 transition-colors text-stone-700"
+                            className={cn(
+                              "p-2 rounded-xl transition-colors flex items-center gap-1",
+                              settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                                ? "bg-stone-800 hover:bg-stone-700 text-stone-300"
+                                : "bg-stone-200 hover:bg-stone-300 text-stone-700"
+                            )}
                           >
-                            <Plus className="w-4 h-4 rotate-45" style={{ transform: 'rotate(0deg)' }} />
+                            <Settings className="w-4 h-4" />
                             <span className="text-[10px] font-bold uppercase">{t.edit}</span>
                           </button>
-                          <button onClick={() => setDatabase(prev => prev.filter(d => d.barcode !== item.barcode))} className="p-2 rounded-xl bg-red-100 hover:bg-red-200 transition-colors text-red-600">
+                          <button onClick={() => setDatabase(prev => prev.filter(d => d.barcode !== item.barcode))} className="p-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 transition-colors text-red-500">
                             <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
@@ -623,15 +830,24 @@ export default function App() {
             >
               <div className="flex items-center justify-between">
                 <h2 className="text-2xl font-black uppercase tracking-tighter">{t.history}</h2>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
                   <button 
-                    onClick={clearHistory}
-                    className="p-2 rounded-xl bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
-                    title={t.clearHistory}
+                    onClick={() => exportToExcel(history, `history_${user.email}`)}
+                    className="p-2 rounded-xl bg-stone-200 hover:bg-stone-300 transition-colors text-stone-700"
+                    title="Export to Excel"
                   >
-                    <Trash2 className="w-5 h-5" />
+                    <FileSpreadsheet className="w-5 h-5" />
                   </button>
-                  <span className="text-xs font-bold text-stone-500 uppercase tracking-widest">{t.last30Days}</span>
+                  <div className="flex items-center gap-3">
+                    <button 
+                      onClick={clearHistory}
+                      className="p-2 rounded-xl bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
+                      title={t.clearHistory}
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                    <span className="text-xs font-bold text-stone-500 uppercase tracking-widest">{t.last30Days}</span>
+                  </div>
                 </div>
               </div>
 
@@ -695,11 +911,26 @@ export default function App() {
         <motion.div 
           initial={{ y: 100 }}
           animate={{ y: 0 }}
-          className="absolute bottom-20 left-4 right-4 bg-stone-200 p-3 rounded-[2rem] flex items-center justify-between shadow-2xl"
+          className={cn(
+            "absolute bottom-20 left-4 right-4 p-3 rounded-[2rem] flex items-center justify-between shadow-2xl transition-colors",
+            settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+              ? "bg-stone-900 shadow-none border border-stone-800"
+              : "bg-white shadow-stone-200 border border-stone-100"
+          )}
         >
           <div className="pl-2">
-            <p className="text-[10px] font-bold text-stone-900/60 uppercase tracking-widest">{t.total}</p>
-            <p className="text-lg font-black text-stone-900">{totalAmount.toFixed(2)} {settings.currency}</p>
+            <p className={cn(
+              "text-[10px] font-bold uppercase tracking-widest",
+              settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                ? "text-stone-500"
+                : "text-stone-900/60"
+            )}>{t.total}</p>
+            <p className={cn(
+              "text-lg font-black",
+              settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                ? "text-white"
+                : "text-stone-900"
+            )}>{totalAmount.toFixed(2)} {settings.currency}</p>
           </div>
           <button 
             onClick={checkout}
@@ -720,11 +951,18 @@ export default function App() {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="relative w-full max-w-md bg-stone-950 rounded-[2.5rem] p-6 shadow-2xl"
+              className={cn(
+                "relative w-full max-w-md rounded-[2.5rem] p-6 shadow-2xl border transition-colors",
+                settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                  ? "bg-stone-900 border-stone-800"
+                  : "bg-white border-stone-200"
+              )}
             >
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-2xl font-black uppercase tracking-tighter">{t.addItem}</h2>
-                <button onClick={() => setIsManualEntryOpen(false)} className="p-2 rounded-full hover:bg-stone-200"><X className="w-6 h-6" /></button>
+                <button onClick={() => setIsManualEntryOpen(false)} className="p-2 rounded-xl hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
               </div>
               <div className="space-y-4">
                 <div className="space-y-2">
@@ -734,7 +972,12 @@ export default function App() {
                     value={manualEntry.name}
                     onChange={e => setManualEntry({...manualEntry, name: e.target.value})}
                     placeholder="e.g. Custom Item"
-                    className="w-full p-4 bg-stone-200 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500"
+                    className={cn(
+                      "w-full p-4 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500 transition-colors",
+                      settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                        ? "bg-stone-950 text-white placeholder-stone-700"
+                        : "bg-stone-100 text-stone-900 placeholder-stone-400"
+                    )}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -746,7 +989,12 @@ export default function App() {
                       value={manualEntry.price}
                       onChange={e => setManualEntry({...manualEntry, price: e.target.value})}
                       placeholder="0.00"
-                      className="w-full p-4 bg-stone-200 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500"
+                      className={cn(
+                        "w-full p-4 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500 transition-colors",
+                        settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                          ? "bg-stone-950 text-white placeholder-stone-700"
+                          : "bg-stone-100 text-stone-900 placeholder-stone-400"
+                      )}
                     />
                   </div>
                   <div className="space-y-2">
@@ -755,7 +1003,12 @@ export default function App() {
                       type="number"
                       value={manualEntry.quantity}
                       onChange={e => setManualEntry({...manualEntry, quantity: e.target.value})}
-                      className="w-full p-4 bg-stone-200 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500"
+                      className={cn(
+                        "w-full p-4 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500 transition-colors",
+                        settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                          ? "bg-stone-950 text-white"
+                          : "bg-stone-100 text-stone-900"
+                      )}
                     />
                   </div>
                 </div>
@@ -782,11 +1035,21 @@ export default function App() {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="relative w-full max-w-md bg-stone-950 rounded-[2.5rem] p-6 shadow-2xl"
+              className={cn(
+                "relative w-full max-w-md rounded-[2.5rem] p-6 shadow-2xl border transition-colors",
+                settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                  ? "bg-stone-900 border-stone-800"
+                  : "bg-white border-stone-200"
+              )}
             >
               <h2 className="text-2xl font-black uppercase tracking-tighter mb-6">{t.registerProduct}</h2>
               <div className="space-y-4">
-                <div className="p-4 bg-stone-200 rounded-2xl">
+                <div className={cn(
+                  "p-4 rounded-2xl transition-colors",
+                  settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                    ? "bg-stone-950"
+                    : "bg-stone-100"
+                )}>
                   <p className="text-[10px] font-bold text-stone-500 uppercase mb-1">{t.barcode}</p>
                   <p className="font-mono font-bold">{registeringProduct.barcode}</p>
                 </div>
@@ -796,16 +1059,29 @@ export default function App() {
                     autoFocus
                     value={registeringProduct.name}
                     onChange={e => setRegisteringProduct({...registeringProduct, name: e.target.value})}
-                    className="w-full p-4 bg-stone-200 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500"
+                    placeholder="e.g. Coca Cola"
+                    className={cn(
+                      "w-full p-4 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500 transition-colors",
+                      settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                        ? "bg-stone-950 text-white placeholder-stone-700"
+                        : "bg-stone-100 text-stone-900 placeholder-stone-400"
+                    )}
                   />
                 </div>
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold text-stone-500 uppercase ml-2">{t.productPrice}</label>
                   <input 
                     type="number"
+                    step="0.01"
                     value={registeringProduct.price}
                     onChange={e => setRegisteringProduct({...registeringProduct, price: e.target.value})}
-                    className="w-full p-4 bg-stone-200 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500"
+                    placeholder="0.00"
+                    className={cn(
+                      "w-full p-4 rounded-2xl font-bold outline-none focus:ring-2 ring-emerald-500 transition-colors",
+                      settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                        ? "bg-stone-950 text-white placeholder-stone-700"
+                        : "bg-stone-100 text-stone-900 placeholder-stone-400"
+                    )}
                   />
                 </div>
               </div>
@@ -860,17 +1136,109 @@ export default function App() {
           </div>
         )}
 
+        {/* Bulk Add Modal */}
+        {isBulkAddOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-6">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsBulkAddOpen(false)} className="absolute inset-0 bg-stone-950/60 backdrop-blur-md" />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-2xl bg-stone-950 rounded-[2.5rem] p-6 shadow-2xl flex flex-col max-h-[90vh]"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-black uppercase tracking-tighter">Bulk Add Products</h2>
+                <button onClick={() => setIsBulkAddOpen(false)} className="p-2 rounded-full hover:bg-stone-200"><X className="w-6 h-6" /></button>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto space-y-4 pr-2">
+                {bulkItems.map((item, index) => (
+                  <div key={index} className="grid grid-cols-[1fr_1.5fr_1fr_auto] gap-3 items-end bg-stone-900 p-4 rounded-2xl border border-stone-800">
+                    <div className="space-y-1">
+                      <label className="text-[8px] font-bold text-stone-500 uppercase ml-1">Barcode</label>
+                      <input 
+                        value={item.barcode}
+                        onChange={e => {
+                          const newItems = [...bulkItems];
+                          newItems[index].barcode = e.target.value;
+                          setBulkItems(newItems);
+                        }}
+                        className="w-full p-2 bg-stone-800 text-white rounded-lg text-sm font-bold outline-none border border-stone-700"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[8px] font-bold text-stone-500 uppercase ml-1">Name</label>
+                      <input 
+                        value={item.name}
+                        onChange={e => {
+                          const newItems = [...bulkItems];
+                          newItems[index].name = e.target.value;
+                          setBulkItems(newItems);
+                        }}
+                        className="w-full p-2 bg-stone-800 text-white rounded-lg text-sm font-bold outline-none border border-stone-700"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[8px] font-bold text-stone-500 uppercase ml-1">Price</label>
+                      <input 
+                        type="number"
+                        value={item.price}
+                        onChange={e => {
+                          const newItems = [...bulkItems];
+                          newItems[index].price = e.target.value;
+                          setBulkItems(newItems);
+                        }}
+                        className="w-full p-2 bg-stone-800 text-white rounded-lg text-sm font-bold outline-none border border-stone-700"
+                      />
+                    </div>
+                    <button 
+                      onClick={() => setBulkItems(bulkItems.filter((_, i) => i !== index))}
+                      className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex gap-3 mt-6">
+                <button 
+                  onClick={() => setBulkItems([...bulkItems, { barcode: '', name: '', price: '' }])}
+                  className="flex-1 py-3 bg-stone-800 text-white rounded-2xl font-bold uppercase text-xs flex items-center justify-center gap-2"
+                >
+                  <Plus className="w-4 h-4" /> Add Row
+                </button>
+                <button 
+                  onClick={handleBulkAdd}
+                  disabled={bulkItems.length === 0 || isSyncing}
+                  className="flex-2 py-3 bg-emerald-500 text-white rounded-2xl font-bold uppercase tracking-widest text-xs shadow-lg shadow-emerald-500/20 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  Save All
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
         {/* Settings Modal */}
         {isSettingsOpen && (
           <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsSettingsOpen(false)} className="absolute inset-0 bg-stone-950/40 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsSettingsOpen(false)} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
             <motion.div 
               initial={{ y: 100 }} animate={{ y: 0 }} exit={{ y: 100 }}
-              className="relative w-full max-w-md bg-stone-950 rounded-t-[2.5rem] sm:rounded-[2.5rem] p-6 shadow-2xl"
+              className={cn(
+                "relative w-full max-w-md rounded-t-[2.5rem] sm:rounded-[2.5rem] p-6 shadow-2xl border",
+                settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                  ? "bg-[#050404] border-white/10"
+                  : "bg-white border-stone-200"
+              )}
             >
               <div className="flex items-center justify-between mb-8">
                 <h2 className="text-2xl font-black uppercase tracking-tighter">{t.settings}</h2>
-                <button onClick={() => setIsSettingsOpen(false)} className="p-2 rounded-full hover:bg-stone-200"><X className="w-6 h-6" /></button>
+                <button onClick={() => setIsSettingsOpen(false)} className="p-2 rounded-xl hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
               </div>
 
               <div className="space-y-8">
@@ -884,8 +1252,10 @@ export default function App() {
                         className={cn(
                           "py-3 rounded-2xl border-2 transition-all font-bold text-xs",
                           settings.language === lang 
-                            ? "border-emerald-500 bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400"
-                            : "border-stone-200"
+                            ? "border-emerald-500 bg-emerald-500/10 text-emerald-500"
+                            : (settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                                ? "border-stone-800 bg-stone-950 text-stone-500"
+                                : "border-stone-100 bg-stone-50 text-stone-500")
                         )}
                       >
                         {lang.toUpperCase()}
@@ -904,8 +1274,10 @@ export default function App() {
                         className={cn(
                           "py-4 rounded-2xl border-2 transition-all flex flex-col items-center justify-center gap-2 font-bold text-[10px]",
                           settings.theme === theme 
-                            ? "border-emerald-500 bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400"
-                            : "border-stone-200"
+                            ? "border-emerald-500 bg-emerald-500/10 text-emerald-500"
+                            : (settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                                ? "border-stone-800 bg-stone-950 text-stone-500"
+                                : "border-stone-100 bg-stone-50 text-stone-500")
                         )}
                       >
                         {theme === 'light' && <Sun className="w-4 h-4" />}
@@ -927,8 +1299,10 @@ export default function App() {
                         className={cn(
                           "py-3 rounded-2xl border-2 transition-all font-bold text-xs",
                           settings.currency === curr 
-                            ? "border-emerald-500 bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400"
-                            : "border-stone-200"
+                            ? "border-emerald-500 bg-emerald-500/10 text-emerald-500"
+                            : (settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                                ? "border-stone-800 bg-stone-950 text-stone-500"
+                                : "border-stone-100 bg-stone-50 text-stone-500")
                         )}
                       >
                         {curr}
@@ -938,7 +1312,12 @@ export default function App() {
                 </div>
               </div>
 
-              <button onClick={() => setIsSettingsOpen(false)} className="w-full mt-10 py-5 rounded-3xl bg-stone-200 text-stone-900 font-black uppercase tracking-widest text-sm hover:bg-stone-300 transition-colors">OK</button>
+              <button 
+                onClick={() => setIsSettingsOpen(false)} 
+                className="w-full mt-10 py-5 rounded-3xl bg-emerald-500 text-white font-black uppercase tracking-widest text-sm shadow-lg shadow-emerald-500/20 hover:scale-[1.02] transition-transform"
+              >
+                OK
+              </button>
             </motion.div>
           </div>
         )}

@@ -2,18 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { 
   Settings, Camera, Upload, Trash2, Plus, Minus, X, Sun, Moon, Monitor,
-  Globe, Database, History, ShoppingCart, Save, CheckCircle2, ChevronRight,
-  Zap, ZapOff, Download, LogOut, FileSpreadsheet, ListPlus, Loader2
+  Database, History, ShoppingCart, Save, CheckCircle2, ChevronRight,
+  Zap, ZapOff, Download, FileSpreadsheet, ListPlus
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { Language, Theme, Tab, InventoryItem, DatabaseItem, SaleRecord, AppSettings } from './types';
 import { translations } from './translations';
-import { auth } from './firebase';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
-import Auth from './components/Auth';
-import { getSupermarketData, saveSupermarketData } from './services/githubService';
 import * as XLSX from 'xlsx';
 
 function cn(...inputs: ClassValue[]) {
@@ -21,11 +17,6 @@ function cn(...inputs: ClassValue[]) {
 }
 
 export default function App() {
-  // --- Auth State ---
-  const [user, setUser] = useState<{ email: string } | null>(null);
-  const [isAuthReady, setIsAuthReady] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
-
   // --- State ---
   const [activeTab, setActiveTab] = useState<Tab>('scanner');
   const [items, setItems] = useState<InventoryItem[]>(() => {
@@ -33,9 +24,11 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
   
-  const [database, setDatabase] = useState<DatabaseItem[]>([]);
-  const [token, setToken] = useState<string>('');
-
+  const [database, setDatabase] = useState<DatabaseItem[]>(() => {
+    const saved = localStorage.getItem('scanstock_database');
+    return saved ? JSON.parse(saved) : [];
+  });
+  
   const [history, setHistory] = useState<SaleRecord[]>(() => {
     const saved = localStorage.getItem('scanstock_history');
     const records: SaleRecord[] = saved ? JSON.parse(saved) : [];
@@ -66,46 +59,6 @@ export default function App() {
   const lastDetectedBarcode = useRef<string | null>(null);
   const clearBarcodeTimeout = useRef<NodeJS.Timeout | null>(null);
   const t = translations[settings.language];
-
-  // --- Auth & Sync Effects ---
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser && firebaseUser.email) {
-        setUser({ email: firebaseUser.email });
-        // Fetch data from GitHub
-        setIsSyncing(true);
-        const data = await getSupermarketData(firebaseUser.email);
-        if (data) {
-          setDatabase(data.products);
-          setToken(data.token);
-        }
-        setIsSyncing(false);
-      } else {
-        setUser(null);
-        setDatabase([]);
-        setToken('');
-      }
-      setIsAuthReady(true);
-    });
-    return unsubscribe;
-  }, []);
-
-  const syncToGitHub = async (newDatabase: DatabaseItem[]) => {
-    if (!user) return;
-    setIsSyncing(true);
-    try {
-      await saveSupermarketData({
-        email: user.email,
-        token: token,
-        products: newDatabase
-      });
-    } catch (err) {
-      console.error("Sync error:", err);
-      alert("Failed to sync with GitHub. Please check your connection.");
-    } finally {
-      setIsSyncing(false);
-    }
-  };
 
   // --- Effects ---
   useEffect(() => {
@@ -278,15 +231,14 @@ export default function App() {
     setRegisteringProduct(null);
   };
 
-  const updateProduct = async () => {
+  const updateProduct = () => {
     if (!editingProduct) return;
     const newDatabase = database.map(d => d.barcode === editingProduct.barcode ? editingProduct : d);
     setDatabase(newDatabase);
-    await syncToGitHub(newDatabase);
     setEditingProduct(null);
   };
 
-  const handleBulkAdd = async () => {
+  const handleBulkAdd = () => {
     const validBulkItems = bulkItems
       .filter(item => item.barcode && item.name && item.price)
       .map(item => ({
@@ -308,7 +260,6 @@ export default function App() {
     });
 
     setDatabase(newDatabase);
-    await syncToGitHub(newDatabase);
     setBulkItems([]);
     setIsBulkAddOpen(false);
   };
@@ -318,10 +269,6 @@ export default function App() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
     XLSX.writeFile(wb, `${fileName}.xlsx`);
-  };
-
-  const handleLogout = async () => {
-    await signOut(auth);
   };
 
   const clearHistory = () => {
@@ -482,26 +429,6 @@ export default function App() {
 
   const totalAmount = items.reduce((acc, item) => acc + item.price * item.quantity, 0);
 
-  if (!isAuthReady) {
-    return (
-      <div className="min-h-screen bg-stone-950 flex items-center justify-center">
-        <Loader2 className="w-12 h-12 text-emerald-500 animate-spin" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <Auth 
-        onAuthSuccess={(email) => setUser({ email })} 
-        language={settings.language}
-        setLanguage={(l) => setSettings(s => ({ ...s, language: l }))}
-        theme={settings.theme === 'system' ? 'dark' : settings.theme}
-        setTheme={(t) => setSettings(s => ({ ...s, theme: t }))}
-      />
-    );
-  }
-
   return (
     <div 
       dir={t.dir}
@@ -527,11 +454,9 @@ export default function App() {
           </div>
           <div className="flex flex-col">
             <h1 className="text-xl font-black tracking-tighter uppercase leading-none">{t.title}</h1>
-            <span className="text-[8px] font-bold text-stone-500 uppercase tracking-widest mt-1">{user.email}</span>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {isSyncing && <Loader2 className="w-4 h-4 text-emerald-500 animate-spin" />}
           <button 
             onClick={() => setIsSettingsOpen(true)}
             className={cn(
@@ -542,17 +467,6 @@ export default function App() {
             )}
           >
             <Settings className="w-6 h-6" />
-          </button>
-          <button 
-            onClick={handleLogout}
-            className={cn(
-              "p-2 rounded-xl transition-colors text-red-500",
-              settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-                ? "hover:bg-stone-900"
-                : "hover:bg-stone-100"
-            )}
-          >
-            <LogOut className="w-6 h-6" />
           </button>
         </div>
       </header>
@@ -746,7 +660,7 @@ export default function App() {
                 <h2 className="text-2xl font-black uppercase tracking-tighter">{t.database}</h2>
                 <div className="flex items-center gap-2">
                   <button 
-                    onClick={() => exportToExcel(database, `database_${user.email}`)}
+                    onClick={() => exportToExcel(database, `database`)}
                     className="p-2 rounded-xl bg-stone-200 hover:bg-stone-300 transition-colors text-stone-700"
                     title="Export to Excel"
                   >
@@ -832,7 +746,7 @@ export default function App() {
                 <h2 className="text-2xl font-black uppercase tracking-tighter">{t.history}</h2>
                 <div className="flex items-center gap-2">
                   <button 
-                    onClick={() => exportToExcel(history, `history_${user.email}`)}
+                    onClick={() => exportToExcel(history, `history`)}
                     className="p-2 rounded-xl bg-stone-200 hover:bg-stone-300 transition-colors text-stone-700"
                     title="Export to Excel"
                   >
@@ -1210,10 +1124,10 @@ export default function App() {
                 </button>
                 <button 
                   onClick={handleBulkAdd}
-                  disabled={bulkItems.length === 0 || isSyncing}
+                  disabled={bulkItems.length === 0}
                   className="flex-2 py-3 bg-emerald-500 text-white rounded-2xl font-bold uppercase tracking-widest text-xs shadow-lg shadow-emerald-500/20 disabled:opacity-50 flex items-center justify-center gap-2"
                 >
-                  {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  <Save className="w-4 h-4" />
                   Save All
                 </button>
               </div>
